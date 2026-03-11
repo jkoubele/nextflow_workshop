@@ -90,23 +90,42 @@ process SalmonQuantification {
     """
 }
 
+process PrepareCountMatrix {
+
+    container "jkoubele/pol-ii-speed-r:0.2.0"
+
+    input:
+    tuple val(sample_names), path(quant_files), path(gtf)
+
+    output:
+    path("tx2gene.tsv"), emit: tx2gene_file
+    path("count_matrix.tsv")
+
+    publishDir "./results/read_counts", mode: 'copy'
+
+    script:
+    """
+    prepare_count_matrix.R --sample_names $sample_names --quant_files $quant_files  --gtf_file $gtf
+    """
+}
+
 workflow{
 
-    samplesheet = './data/samplesheet.csv'
-    fastq_dir = './data/FASTQ'
-    samples = Channel
-            .fromPath(samplesheet)
-            .splitCsv(header: true)
-            .map { row ->
-                def sample      = row.sample
-                def fq1         = file("${fastq_dir}/${row.fastq_1}")
-                def fq2         = file("${fastq_dir}/${row.fastq_2}")
+        samplesheet = './data/samplesheet.csv'
+        fastq_dir = './data/FASTQ'
+        samples = Channel
+                .fromPath(samplesheet)
+                .splitCsv(header: true)
+                .map { row ->
+                    def sample      = row.sample
+                    def fq1         = file("${fastq_dir}/${row.fastq_1}")
+                    def fq2         = file("${fastq_dir}/${row.fastq_2}")
 
-                if (!fq1.exists()) error "FASTQ file not found: ${fq1}"
-                if (!fq2.exists()) error "FASTQ file not found: ${fq2}"
+                    if (!fq1.exists()) error "FASTQ file not found: ${fq1}"
+                    if (!fq2.exists()) error "FASTQ file not found: ${fq2}"
 
-                tuple(sample, fq1, fq2)
-            }
+                    tuple(sample, fq1, fq2)
+                }
 
 
         def fastqc_out = FastQC(samples)
@@ -117,4 +136,22 @@ workflow{
         salmon_index =  BuildSalmonIndex(transcriptome_fasta)
 
         def salmon_quant_out = samples.combine(salmon_index.salmon_index_dir) | SalmonQuantification
+
+        def gtf_channel = Channel.fromPath('./data/transcriptome/Caenorhabditis_elegans.WBcel235.115.gtf')
+
+        def collected_quant = salmon_quant_out
+            .collect(flat: false)
+            .map { sample_data ->
+                def sample_names = sample_data.collect { it[0] }
+                def quant_files  = sample_data.collect { it[1] }
+                tuple(sample_names, quant_files)
+            }
+
+        count_matrix_input = collected_quant.combine(gtf_channel)
+//         count_matrix_input| view
+
+        def count_matrix_channel = PrepareCountMatrix(count_matrix_input)
+
+
+//         collected_quant.combine(gtf_channel) | PrepareCountMatrix
 }
