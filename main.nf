@@ -92,20 +92,43 @@ process SalmonQuantification {
 
 process PrepareCountMatrix {
 
-    container "jkoubele/pol-ii-speed-r:0.2.0"
+    container "jkoubele/nextflow_workshop_r"
 
     input:
     tuple val(sample_names), path(quant_files), path(gtf)
 
     output:
     path("tx2gene.tsv"), emit: tx2gene_file
-    path("count_matrix.tsv")
+    path("count_matrix.tsv"), emit: count_matrix
 
     publishDir "./results/read_counts", mode: 'copy'
 
     script:
     """
-    prepare_count_matrix.R --sample_names $sample_names --quant_files $quant_files  --gtf_file $gtf
+    prepare_count_matrix.R \
+    --sample_names ${sample_names.join(' ')} \
+    --quant_files ${quant_files.join(' ')} \
+    --gtf_file $gtf
+    """
+}
+
+process DEAnalysis {
+
+    container "jkoubele/nextflow_workshop_r"
+
+    input:
+    tuple path(count_matrix), path(samplesheet)
+
+    output:
+    path("DE_results.tsv")
+    path("PCA_plot.png")
+    path("volcano_plot.png")
+
+    publishDir "./results/DE_analysis", mode: 'copy'
+
+    script:
+    """
+    de_analysis.R --count_matrix $count_matrix --samplesheet $samplesheet
     """
 }
 
@@ -113,8 +136,9 @@ workflow{
 
         samplesheet = './data/samplesheet.csv'
         fastq_dir = './data/FASTQ'
-        samples = Channel
-                .fromPath(samplesheet)
+
+        samplesheet_channnel = Channel.fromPath(samplesheet)
+        samples = samplesheet_channnel
                 .splitCsv(header: true)
                 .map { row ->
                     def sample      = row.sample
@@ -133,25 +157,26 @@ workflow{
         MultiQC(fastqc_out_aggregated)
 
         def transcriptome_fasta = Channel.fromPath('./data/transcriptome/Caenorhabditis_elegans.WBcel235.cdna.all.fa')
-        salmon_index =  BuildSalmonIndex(transcriptome_fasta)
+        def salmon_index =  BuildSalmonIndex(transcriptome_fasta)
 
         def salmon_quant_out = samples.combine(salmon_index.salmon_index_dir) | SalmonQuantification
 
         def gtf_channel = Channel.fromPath('./data/transcriptome/Caenorhabditis_elegans.WBcel235.115.gtf')
 
-        def collected_quant = salmon_quant_out
+        def collected_quant = salmon_quant_out.salmon_quant
             .collect(flat: false)
-            .map { sample_data ->
-                def sample_names = sample_data.collect { it[0] }
-                def quant_files  = sample_data.collect { it[1] }
-                tuple(sample_names, quant_files)
-            }
+            .map {list_of_tuples ->
+                def list_of_tuples_sorted = list_of_tuples.sort { it[0] }
+                def sample_names = list_of_tuples_sorted*.getAt(0)
+                def quant_files  = list_of_tuples_sorted*.getAt(1)
+                tuple(sample_names, quant_files)}
 
-        count_matrix_input = collected_quant.combine(gtf_channel)
-//         count_matrix_input| view
+        def count_matrix_input = collected_quant.combine(gtf_channel)
 
         def count_matrix_channel = PrepareCountMatrix(count_matrix_input)
 
+        def de_analysis_input = count_matrix_channel.count_matrix.combine(samplesheet_channnel)
 
-//         collected_quant.combine(gtf_channel) | PrepareCountMatrix
+        de_analysis_input | DEAnalysis
+
 }

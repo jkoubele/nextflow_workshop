@@ -6,6 +6,7 @@ library(DESeq2)
 
 if (interactive()) {
   args <- list(
+    # Hard-coding paths on your system can be useful for development/testing:
     count_matrix = "/home/jakub/Desktop/nextflow_workshop/results/read_counts/count_matrix.tsv",
     samplesheet  = "/home/jakub/Desktop/nextflow_workshop/data/samplesheet.csv"
   )
